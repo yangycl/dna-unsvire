@@ -54,6 +54,32 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
+const GITHUB_REPO = ''; // set to owner/repo for auto reload
+const GITHUB_BRANCH = 'main';
+let lastGitSha = null;
+
+function checkGitHubUpdate() {
+  if (!GITHUB_REPO) return;
+  fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/${GITHUB_BRANCH}`, {cache: 'no-store'})
+    .then(res => {
+      if (!res.ok) throw new Error(res.status);
+      return res.json();
+    })
+    .then(data => {
+      if (!data.sha) return;
+      if (lastGitSha && lastGitSha !== data.sha) {
+        console.info('GitHub repo updated, reloading universe.');
+        location.reload();
+      }
+      lastGitSha = data.sha;
+    })
+    .catch(err => {
+      console.warn('GitHub update check failed:', err);
+    });
+}
+setTimeout(checkGitHubUpdate, 5000);
+setInterval(checkGitHubUpdate, 60000);
+
 let displayAtoms = [];
 let displayBonds = [];
 let frame = 0;
@@ -66,15 +92,15 @@ const workerCode = `
   const ATOM_TYPES = 5;
   const BOND_DIST = 22;
   const BOND_REST = 14;
-  const BOND_LIFE = 3000;
-  const BOND_SPRING = 0.04;
-  const THERMAL = 0.018;
-  const FRICTION = 0.982;
+  const BOND_LIFE = 2600;
+  const BOND_SPRING = 0.055;
+  const THERMAL = 0.032;
+  const FRICTION = 0.96;
   const CELL_SIZE = 5;
   const REPLICATE_SIZE = 5;
   const MUTATE_RATE = 0.08;
   const SOFT_LIMIT = 420;
-  const GRAVITY_STRENGTH = 0.00065;
+  const GRAVITY_STRENGTH = 0.00075;
   const GRAVITY_MIN_DIST = 12;
 
   const COMPAT = [[0,1,1,0,0],[1,0,0,1,1],[1,0,0,1,0],[0,1,1,0,1],[0,1,0,1,0]];
@@ -272,7 +298,7 @@ const workerCode = `
   }
 
   function spawnAtoms() {
-    const spawnChance = 0.04 * Math.min(1, SOFT_LIMIT / atoms.length);
+    const spawnChance = 0.075 * Math.min(1, SOFT_LIMIT / atoms.length);
     if (Math.random() < spawnChance) {
       const x = 20 + Math.random() * (WIDTH - 40);
       const y = 20 + Math.random() * (HEIGHT - 40);
