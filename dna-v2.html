@@ -273,7 +273,7 @@ const workerCode = `
         if (d < BOND_DIST && COMPAT[a.type][b.type]) {
           const distanceFactor = 1 - d / BOND_DIST;
           const shapeFactor = (a.type === 5 || b.type === 5) ? 0.8 : 1;
-          if (Math.random() < 0.12 * distanceFactor * shapeFactor) {
+          if (Math.random() < 0.16 * distanceFactor * shapeFactor) {
             bonds.push({a, b, age: 0});
             bonded.add(a.id + ',' + b.id);
             bonded.add(b.id + ',' + a.id);
@@ -305,7 +305,7 @@ const workerCode = `
 
 
   function spawnAtoms() {
-    const spawnChance = 0.075 * Math.min(1, SOFT_LIMIT / atoms.length);
+    const spawnChance = 0.11 * Math.min(1, SOFT_LIMIT / atoms.length);
     if (Math.random() < spawnChance) {
       if (Math.random() < 0.4) {
         const corner = Math.random() < 0.5 ? 0 : 1;

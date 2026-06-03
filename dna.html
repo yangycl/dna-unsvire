@@ -92,15 +92,15 @@ const workerCode = `
   const ATOM_TYPES = 5;
   const BOND_DIST = 22;
   const BOND_REST = 14;
-  const BOND_LIFE = 2600;
-  const BOND_SPRING = 0.055;
-  const THERMAL = 0.032;
-  const FRICTION = 0.96;
+  const BOND_LIFE = 4200;
+  const BOND_SPRING = 0.065;
+  const THERMAL = 0.038;
+  const FRICTION = 0.94;
   const CELL_SIZE = 5;
   const REPLICATE_SIZE = 5;
   const MUTATE_RATE = 0.08;
   const SOFT_LIMIT = 420;
-  const GRAVITY_STRENGTH = 0.00075;
+  const GRAVITY_STRENGTH = 0.00095;
   const GRAVITY_MIN_DIST = 12;
 
   const COMPAT = [[0,1,1,0,0],[1,0,0,1,1],[1,0,0,1,0],[0,1,1,0,1],[0,1,0,1,0]];
@@ -211,7 +211,7 @@ const workerCode = `
         const dx = b.x - a.x, dy = b.y - a.y;
         const d = Math.sqrt(dx*dx + dy*dy);
         if (d < BOND_DIST && COMPAT[a.type][b.type]) {
-          if (Math.random() < 0.12 * (1 - d / BOND_DIST)) {
+          if (Math.random() < 0.18 * (1 - d / BOND_DIST)) {
             bonds.push({a, b, age: 0});
             bonded.add(a.id + ',' + b.id);
             bonded.add(b.id + ',' + a.id);
@@ -245,9 +245,9 @@ const workerCode = `
 
       const optimalSize = 12;
       const sizeFactor = Math.exp(-Math.pow(mol.length - optimalSize, 2) / 80);
-      const energyFactor = mol.length < 8 ? 1.7 : 1;
+      const energyFactor = mol.length < 10 ? 2.4 : 1.2;
       const speedFactor = Math.min(1, SOFT_LIMIT / atoms.length);
-      const replicationChance = 0.0012 * sizeFactor * mol.length * energyFactor * speedFactor;
+      const replicationChance = 0.0026 * sizeFactor * mol.length * energyFactor * speedFactor;
       if (Math.random() > replicationChance) return;
 
       const cx = mol.reduce((s,a)=>s+a.x,0)/mol.length;
@@ -298,7 +298,7 @@ const workerCode = `
   }
 
   function spawnAtoms() {
-    const spawnChance = 0.075 * Math.min(1, SOFT_LIMIT / atoms.length);
+    const spawnChance = 0.12 * Math.min(1, SOFT_LIMIT / atoms.length);
     if (Math.random() < spawnChance) {
       const x = 20 + Math.random() * (WIDTH - 40);
       const y = 20 + Math.random() * (HEIGHT - 40);
