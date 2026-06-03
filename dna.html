@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>生命湧現 - Web Worker 完整版</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#010204;color:#556677;font-family:'Share Tech Mono',monospace;display:flex;height:100vh;overflow:hidden;}
+#wrap{position:relative;flex:1;}
+canvas{display:block;width:100%;height:100vh;}
+#hud{position:absolute;bottom:10px;left:14px;font-size:10px;letter-spacing:1px;color:#223;pointer-events:none;line-height:1.8;}
+#hud span{color:#3a6a4a;}
+#sidebar{width:240px;background:#010306;border-left:1px solid #0a1018;display:flex;flex-direction:column;}
+#log-head{padding:8px 12px;border-bottom:1px solid #0a1018;font-size:10px;letter-spacing:2px;display:flex;justify-content:space-between;align-items:center;}
+#logArea{flex:1;background:transparent;border:none;color:#1a3a2a;font-family:'Share Tech Mono',monospace;font-size:10px;line-height:1.7;padding:10px 12px;resize:none;outline:none;overflow-y:auto;}
+.btn{background:#0a1018;border:1px solid #0d1a20;color:#445566;font-family:'Share Tech Mono',monospace;font-size:10px;padding:3px 10px;cursor:pointer;letter-spacing:1px;}
+.btn:hover{background:#0d1a24;color:#88aaaa;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="hud">
+    幀 <span id="hFrame">0</span> &nbsp;|&nbsp;
+    原子 <span id="hAtom">0</span> &nbsp;|&nbsp;
+    分子 <span id="hMol">0</span> &nbsp;|&nbsp;
+    細胞 <span id="hCell">0</span> &nbsp;|&nbsp;
+    複製 <span id="hRep">0</span> &nbsp;|&nbsp;
+    突變 <span id="hMut">0</span>
+  </div>
+</div>
+<div id="sidebar">
+  <div id="log-head">
+    <span>LOG</span>
+    <button class="btn" id="btnCopy">複製</button>
+  </div>
+  <textarea id="logArea" readonly></textarea>
+</div>
+
+<script>
+// ==================== 主執行緒 ====================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let WIDTH = 1200, HEIGHT = 800;
+
+function resizeCanvas() {
+  WIDTH = canvas.offsetWidth;
+  HEIGHT = canvas.offsetHeight;
+  canvas.width = WIDTH * devicePixelRatio;
+  canvas.height = HEIGHT * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+let displayAtoms = [];
+let displayBonds = [];
+let frame = 0;
+
+// ==================== Worker 完整程式碼 ====================
+const workerCode = `
+  let atoms = [], bonds = [], frame = 0, totalReplications = 0, totalMutations = 0;
+  let WIDTH = 1200, HEIGHT = 800;
+
+  const ATOM_TYPES = 5;
+  const BOND_DIST = 22;
+  const BOND_REST = 14;
+  const BOND_LIFE = 3000;
+  const BOND_SPRING = 0.04;
+  const THERMAL = 0.018;
+  const FRICTION = 0.982;
+  const CELL_SIZE = 5;
+  const REPLICATE_SIZE = 5;
+  const MUTATE_RATE = 0.08;
+  const SOFT_LIMIT = 420;
+  const GRAVITY_STRENGTH = 0.00065;
+  const GRAVITY_MIN_DIST = 12;
+
+  const COMPAT = [[0,1,1,0,0],[1,0,0,1,1],[1,0,0,1,0],[0,1,1,0,1],[0,1,0,1,0]];
+
+  function mkAtom(x, y, type = Math.floor(Math.random()*ATOM_TYPES), replica = false) {
+    return {id: Date.now() + Math.random(), x, y, vx: (Math.random()-0.5)*1.1, vy: (Math.random()-0.5)*1.1, type, age:0, flash:0, replica};
+  }
+
+  function getMolecules() {
+    const adj = new Map(); atoms.forEach(a => adj.set(a.id, []));
+    bonds.forEach(b => {
+      adj.get(b.a.id)?.push(b.b);
+      adj.get(b.b.id)?.push(b.a);
+    });
+    const visited = new Set(), mols = [];
+    atoms.forEach(a => {
+      if (visited.has(a.id)) return;
+      const mol = [], stack = [a];
+      while (stack.length) {
+        const cur = stack.pop();
+        if (visited.has(cur.id)) continue;
+        visited.add(cur.id);
+        mol.push(cur);
+        (adj.get(cur.id) || []).forEach(nb => stack.push(nb));
+      }
+      mols.push(mol);
+    });
+    return mols;
+  }
+
+  function updatePhysics() {
+    const mols = getMolecules();
+    atoms.forEach(target => {
+      mols.forEach(mol => {
+        if (mol.length < 2) return;
+        let cx = 0, cy = 0;
+        mol.forEach(a => { cx += a.x; cy += a.y; });
+        cx /= mol.length; cy /= mol.length;
+        const mass = mol.length * 1.6;
+        const dx = cx - target.x;
+        const dy = cy - target.y;
+        const distSq = dx*dx + dy*dy;
+        if (distSq > GRAVITY_MIN_DIST * GRAVITY_MIN_DIST) {
+          const dist = Math.sqrt(distSq);
+          const force = GRAVITY_STRENGTH * mass / dist;
+          target.vx += (dx / dist) * force;
+          target.vy += (dy / dist) * force;
+        }
+      });
+    });
+
+    atoms.forEach(a => {
+      a.vx += (Math.random()-0.5) * THERMAL;
+      a.vy += (Math.random()-0.5) * THERMAL;
+    });
+
+    bonds.forEach(b => {
+      const dx = b.b.x - b.a.x, dy = b.b.y - b.a.y;
+      const d = Math.sqrt(dx*dx + dy*dy) || 0.01;
+      const f = (d - BOND_REST) * BOND_SPRING;
+      const fx = (dx/d)*f, fy = (dy/d)*f;
+      b.a.vx += fx; b.a.vy += fy;
+      b.b.vx -= fx; b.b.vy -= fy;
+    });
+
+    const repulsionSample = Math.min(atoms.length, 220);
+    const repulsionStart = atoms.length > repulsionSample ? Math.floor(Math.random() * (atoms.length - repulsionSample)) : 0;
+    for (let i = repulsionStart; i < repulsionStart + repulsionSample; i++) {
+      for (let j = i + 1; j < repulsionStart + repulsionSample; j++) {
+        const a = atoms[i], b = atoms[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < 4) {
+          const d = Math.sqrt(d2) || 0.01;
+          const f = (4 - d) / d * 0.1;
+          a.vx -= dx * f; a.vy -= dy * f;
+          b.vx += dx * f; b.vy += dy * f;
+        }
+      }
+    }
+
+    atoms.forEach(a => {
+      a.vx *= FRICTION; a.vy *= FRICTION;
+      const spd = Math.sqrt(a.vx*a.vx + a.vy*a.vy);
+      if (spd > 4.5) { a.vx = a.vx/spd*4.5; a.vy = a.vy/spd*4.5; }
+      a.x += a.vx; a.y += a.vy;
+
+      if (a.x < 8) { a.x = 8; a.vx *= -0.75; }
+      if (a.x > WIDTH - 8) { a.x = WIDTH - 8; a.vx *= -0.75; }
+      if (a.y < 8) { a.y = 8; a.vy *= -0.75; }
+      if (a.y > HEIGHT - 8) { a.y = HEIGHT - 8; a.vy *= -0.75; }
+      a.age++;
+    });
+  }
+
+  function updateChemistry() {
+    const bonded = new Set();
+    bonds.forEach(b => {
+      bonded.add(b.a.id + ',' + b.b.id);
+      bonded.add(b.b.id + ',' + b.a.id);
+    });
+    const chemStart = atoms.length > 260 ? Math.floor(Math.random() * (atoms.length - 260)) : 0;
+    const sampleAtoms = atoms.length > 260 ? atoms.slice(chemStart, chemStart + 260) : atoms;
+    for (let i = 0; i < sampleAtoms.length; i++) {
+      for (let j = i + 1; j < sampleAtoms.length; j++) {
+        const a = sampleAtoms[i], b = sampleAtoms[j];
+        if (bonded.has(a.id + ',' + b.id)) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.sqrt(dx*dx + dy*dy);
+        if (d < BOND_DIST && COMPAT[a.type][b.type]) {
+          if (Math.random() < 0.12 * (1 - d / BOND_DIST)) {
+            bonds.push({a, b, age: 0});
+            bonded.add(a.id + ',' + b.id);
+            bonded.add(b.id + ',' + a.id);
+            a.flash = b.flash = frame;
+          }
+        }
+      }
+    }
+  }
+
+  function updateBonds() {
+    bonds = bonds.filter(b => {
+      b.age++;
+      const mol = getMolecules().find(m => m.includes(b.a));
+      const instability = mol ? Math.min(0.2, mol.length * 0.003) : 0;
+      let breakProb = b.age / BOND_LIFE * 0.02 + instability;
+      const dx = b.b.x - b.a.x;
+      const dy = b.b.y - b.a.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist > BOND_REST * 3) breakProb += 0.1;
+      return Math.random() > breakProb;
+    });
+  }
+
+  function updateReplication() {
+    const mols = getMolecules();
+    let replicatedThisFrame = false;
+    mols.forEach(mol => {
+      if (replicatedThisFrame) return;
+      if (mol.length < REPLICATE_SIZE) return;
+
+      const optimalSize = 12;
+      const sizeFactor = Math.exp(-Math.pow(mol.length - optimalSize, 2) / 80);
+      const energyFactor = mol.length < 8 ? 1.7 : 1;
+      const speedFactor = Math.min(1, SOFT_LIMIT / atoms.length);
+      const replicationChance = 0.0012 * sizeFactor * mol.length * energyFactor * speedFactor;
+      if (Math.random() > replicationChance) return;
+
+      const cx = mol.reduce((s,a)=>s+a.x,0)/mol.length;
+      const cy = mol.reduce((s,a)=>s+a.y,0)/mol.length;
+
+      const angle = Math.random()*Math.PI*2;
+      const dist = 30 + mol.length*2;
+      const ox = Math.cos(angle)*dist;
+      const oy = Math.sin(angle)*dist;
+
+      const idMap = new Map();
+      const newAtoms = [];
+
+      mol.forEach(a => {
+        let newType = a.type;
+        const lengthFactor = 1 + Math.max(0, mol.length - REPLICATE_SIZE) / 8;
+        if (Math.random() < Math.min(0.45, MUTATE_RATE * lengthFactor)) {
+          newType = Math.floor(Math.random()*ATOM_TYPES);
+          totalMutations++;
+        }
+
+        const na = mkAtom(
+          Math.max(8, Math.min(WIDTH-8, cx+ox+(a.x-cx)+(Math.random()-0.5)*4)),
+          Math.max(8, Math.min(HEIGHT-8, cy+oy+(a.y-cy)+(Math.random()-0.5)*4)),
+          newType, true
+        );
+        na.vx = (Math.random()-0.5)*0.5;
+        na.vy = (Math.random()-0.5)*0.5;
+        na.flash = frame;
+
+        idMap.set(a.id, na);
+        newAtoms.push(na);
+      });
+
+      bonds.filter(b => mol.includes(b.a) && mol.includes(b.b))
+        .forEach(b => {
+          const na = idMap.get(b.a.id);
+          const nb = idMap.get(b.b.id);
+          if (na && nb && COMPAT[na.type][nb.type]) {
+            bonds.push({a:na, b:nb, age:0});
+          }
+        });
+
+      atoms.push(...newAtoms);
+      totalReplications++;
+      replicatedThisFrame = true;
+    });
+  }
+
+  function spawnAtoms() {
+    const spawnChance = 0.04 * Math.min(1, SOFT_LIMIT / atoms.length);
+    if (Math.random() < spawnChance) {
+      const x = 20 + Math.random() * (WIDTH - 40);
+      const y = 20 + Math.random() * (HEIGHT - 40);
+      atoms.push(mkAtom(x, y));
+    }
+  }
+
+  self.onmessage = function(e) {
+    if (e.data.type === 'init') {
+      WIDTH = e.data.width || 1200;
+      HEIGHT = e.data.height || 800;
+      atoms = [];
+      for (let i = 0; i < 280; i++) {
+        atoms.push(mkAtom(Math.random()*WIDTH, Math.random()*HEIGHT));
+      }
+      self.postMessage({type: 'ready'});
+    } 
+    else if (e.data.type === 'update') {
+      WIDTH = e.data.width || WIDTH;
+      HEIGHT = e.data.height || HEIGHT;
+      frame++;
+
+      updatePhysics();
+      updateChemistry();
+      updateBonds();
+      updateReplication();
+      spawnAtoms();
+
+      const mols = getMolecules();
+      const moleculeCount = mols.filter(m => m.length > 1).length;
+      const cellCount = mols.filter(m => m.length >= CELL_SIZE).length;
+      const topMolecules = mols
+        .filter(m => m.length > 1)
+        .sort((a,b) => b.length - a.length)
+        .slice(0,12)
+        .map(m => {
+          const types = m.map(a => a.type + 1).sort().join('');
+          const tag = m.some(a => a.replica) ? '[複製體]' : m.length >= CELL_SIZE ? '[細胞]' : '[分子]';
+          return {size: m.length, types, tag};
+        });
+
+      const simpleAtoms = atoms.map(a => ({x: a.x, y: a.y, type: a.type, flash: a.flash || 0}));
+      const simpleBonds = bonds.map(b => ({ax: b.a.x, ay: b.a.y, bx: b.b.x, by: b.b.y, age: b.age || 0}));
+
+      self.postMessage({
+        type: 'update',
+        atoms: simpleAtoms,
+        bonds: simpleBonds,
+        frame: frame,
+        atomCount: atoms.length,
+        moleculeCount,
+        cellCount,
+        topMolecules,
+        rep: totalReplications,
+        mut: totalMutations
+      });
+    }
+  };
+`;
+
+const blob = new Blob([workerCode], {type: 'application/javascript'});
+const worker = new Worker(URL.createObjectURL(blob));
+
+worker.onmessage = function(e) {
+  if (e.data.type === 'update') {
+    displayAtoms = e.data.atoms;
+    displayBonds = e.data.bonds;
+    frame = e.data.frame;
+    document.getElementById('hFrame').textContent = frame;
+    document.getElementById('hAtom').textContent = e.data.atomCount;
+    document.getElementById('hMol').textContent = e.data.moleculeCount || 0;
+    document.getElementById('hCell').textContent = e.data.cellCount || 0;
+    document.getElementById('hRep').textContent = e.data.rep || 0;
+    document.getElementById('hMut').textContent = e.data.mut || 0;
+
+    const lines = [
+      `[幀=${frame}] 原子=${e.data.atomCount} 分子=${e.data.moleculeCount || 0} 細胞=${e.data.cellCount || 0}`,
+      `複製=${e.data.rep || 0} 突變=${e.data.mut || 0}`,
+      '',
+      '=== 分子列表（大→小）===',
+    ];
+    (e.data.topMolecules || []).forEach((m, i) => {
+      lines.push(`M${i} 大小=${m.size} 類型=[${m.types}] ${m.tag}`);
+    });
+    document.getElementById('logArea').value = lines.join('\n');
+
+    draw();
+  }
+};
+
+worker.postMessage({type: 'init', width: WIDTH, height: HEIGHT});
+
+function draw() {
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+  // 繪製鍵結
+  ctx.strokeStyle = '#224422';
+  ctx.lineWidth = 1.2;
+  displayBonds.forEach(b => {
+    ctx.beginPath();
+    ctx.moveTo(b.ax, b.ay);
+    ctx.lineTo(b.bx, b.by);
+    ctx.stroke();
+  });
+
+  // 繪製原子
+  const colors = ['#00ffaa','#ff6644','#44aaff','#ffee44','#ff44cc'];
+  displayAtoms.forEach(a => {
+    ctx.fillStyle = colors[a.type % 5];
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (a.flash > frame - 10) {
+      ctx.fillStyle = 'white';
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+}
+
+function loop() {
+  worker.postMessage({type: 'update', width: WIDTH, height: HEIGHT});
+  requestAnimationFrame(loop);
+}
+loop();
+
+const btnCopy = document.getElementById('btnCopy');
+const logArea = document.getElementById('logArea');
+btnCopy.addEventListener('click', () => {
+  const text = logArea.value;
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(() => {
+      logArea.select();
+      document.execCommand('copy');
+      window.getSelection().removeAllRanges();
+    });
+  } else {
+    logArea.select();
+    document.execCommand('copy');
+    window.getSelection().removeAllRanges();
+  }
+});
+</script>
+</body>
+</html>
